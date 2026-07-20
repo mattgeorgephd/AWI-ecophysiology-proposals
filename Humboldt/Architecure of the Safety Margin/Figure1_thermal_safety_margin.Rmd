@@ -1,0 +1,235 @@
+---
+title: "Figure 1 — The realized thermal safety margin"
+author: "M. N. George"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_width: 11
+    fig_height: 4.4
+---
+
+<!--
+Reproduces Figure 1 for the Humboldt P1 proposal and writes a 300-dpi PNG
+(Figure1_thermal_safety_margin.png) to the working directory.
+
+Run it either way:
+  * open in RStudio and Knit, or
+  * Rscript -e 'rmarkdown::render("Figure1_thermal_safety_margin.Rmd")'
+Both paths call ggsave() in the final chunk, so the PNG is produced regardless of
+whether you knit to HTML.
+
+All tunable knobs (curve shape, mean placement, colours, panel-B timing, output
+size) live in the `params` chunk. Nothing below it should need editing.
+-->
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE,
+                      dev = "png", dpi = 300, fig.width = 11, fig.height = 4.4)
+```
+
+## Dependencies
+
+```{r deps}
+pkgs <- c("ggplot2", "patchwork")
+new  <- pkgs[!pkgs %in% rownames(installed.packages())]
+if (length(new)) install.packages(new, repos = "https://cloud.r-project.org")
+invisible(lapply(pkgs, library, character.only = TRUE))
+```
+
+## Parameters (edit here)
+
+```{r params}
+## ---- Panel A: asymmetric thermal curve (Deutsch et al. 2008 form) ----
+Topt      <- 24     # thermal optimum (deg C)
+CTmax     <- 32     # critical thermal maximum (deg C); the curve reaches 0 here
+sigma     <- 9      # breadth of the sub-optimal (Gaussian) rise; larger = more gradual
+Tmean     <- 27     # mean of the realized regime; placed on the super-optimal shoulder
+regime_sd <- 2.4    # SD of the realized thermal regime
+dens_peak <- 0.26   # drawn height of the regime distribution, in P-units
+
+## y-axis label for panel A.
+## The Fig. 1 caption describes a performance-curve SHAPE (rise to an optimum) but then
+## averages it to a SURVIVAL expectation. The label below spans both, matching the caption
+## and the P(T) notation. For a strict survival reading (a high plateau that drops steeply,
+## no rising limb), set ylab_A <- "Survival probability" AND switch Pfun() to the commented
+## logistic form in the model chunk.
+ylab_A <- "Performance / survival, P(T)"
+
+## ---- Panel B: protection dynamics during one fast extreme ----
+t_onset   <- 3.0    # time the extreme arrives
+demand_hi <- 0.90   # protection demanded at the peak of the extreme
+front_lvl <- 0.92   # constitutive (frontloaded) protection, held in advance
+react_hi  <- 0.95   # inducible reach of the reactive strategy
+react_lag <- 2.0    # induction lag: time units after onset to the mid-point of the rise
+
+## ---- Palette (Okabe-Ito, colour-blind safe) ----
+col_curve  <- "#111111"
+col_regime <- "#E69F00"  # orange: realized regime / thermal demand
+col_pmean  <- "#0072B2"  # blue:   value-at-the-mean, and the frontloaded strategy
+col_ep     <- "#D55E00"  # vermillion: realized expectation, and the reactive strategy
+
+## ---- Output ----
+out_png <- "Figure1_thermal_safety_margin.png"
+fig_w   <- 11
+fig_h   <- 4.4
+fig_dpi <- 300
+```
+
+## Model
+
+```{r model}
+## Asymmetric thermal performance/survival curve:
+## Gaussian rise for T <= Topt, parabolic collapse to 0 at CTmax for T > Topt.
+Pfun <- function(T) {
+  left  <- exp(-((T - Topt) / (2 * sigma))^2)
+  right <- 1 - ((T - Topt) / (Topt - CTmax))^2
+  out   <- ifelse(T <= Topt, left, right)
+  pmax(pmin(out, 1), 0)
+}
+
+## ---- Optional strict-survival alternative (plateau, then steep logistic drop) ----
+## Uncomment these three lines and set ylab_A <- "Survival probability" in params.
+# T50 <- 30.5   # temperature of 50% survival
+# steep <- 0.9  # smaller = steeper drop
+# Pfun <- function(T) 1 / (1 + exp((T - T50) / steep))
+
+## Value at the mean vs. the nonlinear (Jensen) average over the realized regime.
+Pmean <- Pfun(Tmean)
+EP <- integrate(function(T) Pfun(T) * dnorm(T, Tmean, regime_sd),
+                lower = Tmean - 6 * regime_sd,
+                upper = Tmean + 6 * regime_sd)$value
+
+cat(sprintf("P(mean) = %.3f | E[P] = %.3f | Jensen penalty = %.3f | safety margin = %.1f C\n",
+            Pmean, EP, Pmean - EP, CTmax - Tmean))
+```
+
+## Panel A — the Jensen penalty and the static safety margin
+
+```{r panelA}
+Tg       <- seq(5, 36, length.out = 1500)
+curve_df <- data.frame(T = Tg, P = Pfun(Tg))
+dens     <- dnorm(Tg, Tmean, regime_sd)
+dens_df  <- data.frame(T = Tg, d = dens / max(dens) * dens_peak)
+
+y_sm <- -0.12   # y-position of the safety-margin bar (below the axis)
+x_jp <- 6.4     # x-position of the Jensen-penalty bar
+
+pA <- ggplot() +
+  ## realized thermal regime
+  geom_area(data = dens_df, aes(T, d), fill = col_regime, alpha = 0.55) +
+  geom_line(data = dens_df, aes(T, d), colour = col_regime, linewidth = 0.5) +
+  ## the tolerance curve
+  geom_line(data = curve_df, aes(T, P), colour = col_curve, linewidth = 1.0) +
+  ## guide verticals at the mean and at CTmax
+  annotate("segment", x = Tmean, xend = Tmean, y = 0, yend = 1.00,
+           linetype = "dotted", colour = "grey45") +
+  annotate("segment", x = CTmax, xend = CTmax, y = 0, yend = 0.55,
+           linetype = "dotted", colour = "grey45") +
+  ## value-at-mean and realized-expectation levels
+  annotate("segment", x = 5, xend = Tmean, y = Pmean, yend = Pmean,
+           linetype = "dashed", colour = col_pmean, linewidth = 0.5) +
+  annotate("segment", x = 5, xend = Tmean, y = EP, yend = EP,
+           linetype = "dashed", colour = col_ep, linewidth = 0.5) +
+  annotate("text", x = 5.4, y = Pmean + 0.035, label = "P(mean T)",
+           colour = col_pmean, hjust = 0, size = 3) +
+  annotate("text", x = 5.4, y = EP - 0.045, label = "E[P(T)]  (realized)",
+           colour = col_ep, hjust = 0, size = 3) +
+  ## Jensen-penalty bar
+  annotate("segment", x = x_jp, xend = x_jp, y = EP, yend = Pmean,
+           arrow = grid::arrow(ends = "both", length = grid::unit(0.14, "cm")),
+           linewidth = 0.6) +
+  annotate("text", x = x_jp + 0.5, y = (EP + Pmean) / 2, label = "Jensen\npenalty",
+           hjust = 0, size = 3, lineheight = 0.9) +
+  ## static safety-margin bar (CTmax minus mean)
+  annotate("segment", x = Tmean, xend = CTmax, y = y_sm, yend = y_sm,
+           arrow = grid::arrow(ends = "both", length = grid::unit(0.14, "cm")),
+           colour = "grey30") +
+  annotate("text", x = (Tmean + CTmax) / 2, y = y_sm - 0.055,
+           label = "safety margin\n(CTmax - mean)", vjust = 1, size = 2.9, lineheight = 0.9) +
+  ## axis anchors
+  annotate("text", x = Topt,  y = 1.03, label = "Topt",  size = 3, fontface = 3) +
+  annotate("text", x = CTmax, y = 0.03, label = "CTmax", size = 3, fontface = 3, colour = "grey20") +
+  annotate("text", x = Tmean, y = dens_peak + 0.03, label = "mean", size = 2.9, colour = "#9C6B00") +
+  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  coord_cartesian(xlim = c(5, 36), ylim = c(-0.24, 1.08), clip = "off") +
+  labs(x = "Body temperature (\u00B0C)", y = ylab_A) +
+  theme_classic(base_size = 11) +
+  theme(plot.margin = margin(6, 10, 22, 6))
+```
+
+## Panel B — frontloaded vs. reactive under a fast extreme
+
+```{r panelB}
+tt   <- seq(0, 10, length.out = 1000)
+logi <- function(x, c, k) 1 / (1 + exp(-k * (x - c)))
+
+demand <- 0.10 + (demand_hi - 0.10) * logi(tt, t_onset + 0.3, 6)
+front  <- rep(front_lvl, length(tt))
+react  <- 0.10 + (react_hi  - 0.10) * logi(tt, t_onset + react_lag, 2.2)
+
+## the vulnerability window: demand exceeds the reactive response during induction
+gap_df <- data.frame(t = tt, react = react, demand = demand)
+gap_df <- gap_df[gap_df$demand > gap_df$react, ]
+gi     <- which.max(demand - react)
+
+pB <- ggplot() +
+  geom_ribbon(data = gap_df, aes(x = t, ymin = react, ymax = demand),
+              fill = col_ep, alpha = 0.20) +
+  geom_line(data = data.frame(t = tt, y = demand), aes(t, y), colour = col_regime, linewidth = 1.0) +
+  geom_line(data = data.frame(t = tt, y = front),  aes(t, y), colour = col_pmean,  linewidth = 1.0) +
+  geom_line(data = data.frame(t = tt, y = react),  aes(t, y), colour = col_ep,     linewidth = 1.0) +
+  ## onset marker
+  annotate("segment", x = t_onset, xend = t_onset, y = 0, yend = 1.05,
+           linetype = "dotted", colour = "grey45") +
+  annotate("text", x = t_onset + 0.1, y = 1.05, label = "fast extreme",
+           hjust = 0, size = 2.9, colour = "grey25") +
+  ## direct line labels (no legend, so nothing to mis-position across ggplot versions)
+  annotate("text", x = 0.3, y = front_lvl + 0.05, label = "Frontloaded (constitutive)",
+           colour = col_pmean, hjust = 0, size = 2.9) +
+  annotate("text", x = 4.4, y = 0.985, label = "Thermal demand",
+           colour = col_regime, hjust = 0, size = 2.9) +
+  annotate("text", x = 5.7, y = 0.30, label = "Reactive (inducible)",
+           colour = col_ep, hjust = 0, size = 2.9) +
+  ## gap callout
+  annotate("segment", x = 6.4, xend = tt[gi], y = 0.52,
+           yend = (demand[gi] + react[gi]) / 2,
+           arrow = grid::arrow(length = grid::unit(0.14, "cm")), colour = col_ep) +
+  annotate("text", x = 6.5, y = 0.52, label = "transient\nprotection gap",
+           hjust = 0, size = 2.9, colour = col_ep, lineheight = 0.9) +
+  scale_y_continuous(breaks = c(0, 0.5, 1)) +
+  coord_cartesian(xlim = c(0, 10), ylim = c(0, 1.1), clip = "off") +
+  labs(x = "Time", y = "Protective capacity") +
+  theme_classic(base_size = 11) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        plot.margin = margin(6, 8, 6, 6))
+```
+
+## Assemble and export
+
+```{r assemble, fig.width=fig_w, fig.height=fig_h}
+fig1 <- pA + pB +
+  patchwork::plot_layout(widths = c(1.25, 1)) +
+  patchwork::plot_annotation(tag_levels = "A") &
+  ggplot2::theme(plot.tag = ggplot2::element_text(face = "bold", size = 13))
+
+ggsave(out_png, fig1, width = fig_w, height = fig_h, units = "in",
+       dpi = fig_dpi, bg = "white")
+
+fig1
+```
+
+<!--
+Draft-4 caption this figure renders, for reference:
+
+Figure 1. (A) A single asymmetric thermal curve rises gradually to the optimum and
+collapses steeply to the critical thermal maximum (CTmax). The realized thermal regime
+is overlaid as a distribution on the temperature axis. Because the curve is nonlinear,
+the realized survival expectation E[P(T)] falls below the value at the mean, P(mean T);
+the gap is the Jensen penalty. The static safety margin, CTmax minus the mean, ignores
+this penalty (and the duration-dependence of tolerance) and so overestimates the realized
+margin. (B) Two genomic strategies defend the same nominal limit differently: a
+frontloaded transcriptome (high constitutive stress-gene expression, little inducible
+headroom) is protective in advance, whereas a reactive, inducible one (low baseline,
+large inducible reach) lags a fast extreme, opening a transient protection gap. The two
+architectures therefore predict different realized safety margins under fluctuation.
+-->
